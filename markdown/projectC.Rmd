@@ -1,0 +1,83 @@
+---
+title: "projectC"
+author: "Phoebe Hessen"
+date: "5/1/2020"
+output: pdf_document
+---
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(caret)
+library(parallel)
+library(doParallel)
+```
+
+
+# Data Import and Cleaning
+
+```{r}
+data <- read_csv("data/data.csv") %>%
+  select(Q1:Q22, TIPI1:TIPI10, familysize) %>%
+  na_if(0) %>%
+  drop_na("familysize") %>%
+  filter(!(rowSums(is.na(.[,1:32])) >= 20))
+
+set.seed(123)
+
+# Creating random train and holdout samples
+rows <- sample(nrow(data))
+shuffled_data <- data[rows,]
+train <- shuffled_data[2001:nrow(shuffled_data),]
+holdout <- shuffled_data[1:2000,]
+
+# Creating a training method vector to do 10-fold cross-validation
+index <- createFolds(train$familysize, k = 10, returnTrain = T)
+my_control_train <- trainControl(method = "cv", number = 10, index = index, verboseIter = T)
+
+# Creating a pre-processing vector to use for all models that imputes missing
+# values using the knn technique, centers and scales the data, and removes
+# predictors with near zero variance
+my_preProcess <- c("knnImpute","zv", "center", "scale")
+```
+
+
+I am interested in predicting marital status ("married") based on answers to 
+the Nerdy Personality Attributes Scale (Q1:Q26) and IPIP items ("TIPI1:TIPI10"
+and their additional item, "nerdy"). 
+
+Data downloaded from https://openpsychometrics.org/_rawdata/. 
+
+
+# Analysis
+
+```{r}
+local_cluster <- makeCluster(detectCores()-1)
+registerDoParallel(local_cluster)
+
+mod <- train(
+  familysize ~ . ^2, 
+    train,
+    method = "glmnet",
+    preProcess = my_preProcess,
+    na.action = na.pass,
+    trControl = my_control_train,
+    tuneLength = 2
+)
+
+stopCluster(local_cluster)
+registerDoSEQ()
+```
+
+
+```{r}
+mod_predict <- predict(mod, holdout, na.action=na.pass)
+cor(holdout$familysize, mod_predict)
+```
+
+
+
+
+
+
