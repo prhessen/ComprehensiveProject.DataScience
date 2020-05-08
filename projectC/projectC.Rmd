@@ -1,0 +1,125 @@
+---
+title: "projectC"
+author: "Phoebe Hessen"
+date: "5/1/2020"
+output: pdf_document
+---
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(caret)
+library(parallel)
+library(doParallel)
+```
+
+
+# Data Import and Cleaning
+
+```{r}
+data <- read_csv("data/tr_survey.csv") %>%
+  select("Motivated", "Flexibility":"Reward - Importance")
+
+set.seed(123)
+
+# Creating random train and holdout samples
+rows <- sample(nrow(data))
+shuffled_data <- data[rows,]
+train <- shuffled_data[51:nrow(shuffled_data),]
+holdout <- shuffled_data[1:50,]
+
+# Creating a training method vector to do 10-fold cross-validation
+index <- createFolds(train$Motivated, k = 10, returnTrain = T)
+my_control_train <- trainControl(method = "cv", number = 10, index = index, verboseIter = T)
+
+# Creating a pre-processing vector to use for all models that imputes missing
+# values using the knn technique, centers and scales the data, and removes
+# predictors with near zero variance
+my_preProcess <- c("knnImpute","zv", "center", "scale")
+```
+
+
+This dataset was collected by myself and some colleagues when I was working as
+an HR Intern at Thomson Reuters. It contains demographic information and self-
+reported job characteristics and the importance of those characteristics from
+members of the Legal division Sales team. I chose this dataset because it 
+contains interesting information, and is well-suited to machine learning (as
+described below).
+
+I am interested in predicting self-reported motivation at work ("Motivated")
+based on self-reported job characteristics and their importance to the 
+employee. Machine learning is appropriate in this scenario because I
+believe that there may be an interaction between the ratings of the extent to
+which a job contains a certain characteristic (e.g., has advancement 
+opportunities) and how important those characteristics are to an employee (e.g.
+importance of advancement opportunities) in predicting motivation at work. 
+Therefore, the original proposed model will include all two-way interactions.
+With a sample size of only 249, traditional regression methods will not be 
+appropriate in a model with 171 predictors. Machine learning is a better option.
+A model developed in this manner could help predict who may lack motivation 
+based on their self-reports of job characteristics and associated importance.
+
+Given that I am predicting a quantitative outcome, with a small sample size
+where potentially many of the predictors (i.e., many of the two-way interactions
+in particular) may not be important, I have elected to use elastic net 
+regression. This will allow predictors that are not important to either be
+weighted very lightly or even drop out of the model entirely (depending on the
+hyperparameters selected). 
+
+
+# Analysis and Visualization
+
+```{r}
+local_cluster <- makeCluster(detectCores()-1)
+registerDoParallel(local_cluster)
+
+mod <- train(
+  Motivated ~ . ^2, 
+  train,
+  method = "glmnet",
+  preProcess = my_preProcess,
+  na.action = na.pass,
+  trControl = my_control_train,
+  tuneLength = 7
+)
+
+stopCluster(local_cluster)
+registerDoSEQ()
+```
+
+The optimal model that resulted had alpha = 1 and lambda = 0.0461. This means
+that it is a LASSO regression model, which further means that unimportant 
+predictors could be dropped from the final model. 
+
+
+```{r}
+mod_predict <- predict(mod, holdout, na.action=na.pass)
+correlation <- cor(holdout$Motivated, mod_predict)
+correlation
+```
+
+The correlation between the training sample and the holdout sample is 
+`r correlation`. This is a fairly good correlation, indication that motivation
+can be predicted by this set of job characteristics and their importance 
+ratings. 
+
+```{r}
+plot(mod$finalModel)
+coef(mod$finalModel, mod$bestTune$lambda)
+```
+
+From both the plot of the coefficients and the list of coefficients, a couple 
+things are apparent. There are many coefficients that are driven down to zero
+or near zero vlaues. However, there are also several predictors that turn out 
+to be important for predicting motivation. For example, the main effects of
+Impact (feeling like the work you do makes an impact) and Appreciation (feeling
+appreciated for the work you do), along with 11 of the interaction terms, 
+appear to contribute significantly to the prediction of motivation at work. 
+Based on this, it appears that the level of motivation one experiences at work
+is related to one's perceptions of the presence (or absence) of various job 
+characteristics and their importance.  
+
+
+
+

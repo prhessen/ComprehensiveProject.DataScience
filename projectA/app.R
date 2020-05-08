@@ -8,6 +8,7 @@
 #
 
 # Libraries
+
 library(shiny)
 library(rtweet)
 library(tidyverse)
@@ -17,8 +18,12 @@ library(textstem)
 library(RWeka)
 library(wordcloud)
 library(shiny)
+library(rsconnect)
 
-# API Access Info
+# Data Import and Cleaning
+
+## API Access Info
+
 api <- '7DPTSeLp9wqmBaoayNYpPJvLp'
 apiSecret <- 'ftzB0U2ulWaYs32tNHn9lERkhbVUtbuAiP6o8Lec5XV7lNU7GM'
 access <- '1012248144-7qLC5cfX6BVKS1a4lpnIHRndLSPOxiUA62RnEOw'
@@ -31,7 +36,7 @@ twitter_token <- create_token(
     access_token = access,
     access_secret = accessSecret)
 
-# Twitter API Calls
+## Twitter API Calls
 COVID <- search_tweets(q = "#COVID",
                        n = 500,
                        include_rts = F)
@@ -48,16 +53,16 @@ COVID_19 <- search_tweets(q = "#COVID_19",
                           n = 500,
                           include_rts = F)
 
-# Tokenizer function
+## Tokenizer function
 tokenizer <- function(x)
 {NGramTokenizer(x, Weka_control(min = 1, max = 2))}
 
-# Function for removing regex patterns from tweets
+## Function for removing regex patterns from tweets
 f <- content_transformer(function(x, pattern) gsub(pattern, "", x))
 
-# For this function, input is a dataframe of tweets
-# Output is a clean DTM
-# Gets called in tibble_fxn
+## For this function, input is a dataframe of tweets
+## Output is a clean DTM (steps described in more detail below)
+## Gets called in tibble_fxn
 clean_fxn <- function(x) {
     full_tweets <- x$text %>% iconv("UTF-8", "ASCII", sub="")
     twitter_cp <- VCorpus(VectorSource(full_tweets))
@@ -87,44 +92,61 @@ clean_fxn <- function(x) {
         control = list(tokenize = tokenizer)
     )
     # Remove sparse terms
+    # The different hastags result in very different numbers of tweets across
+    # different API calls, but this index almost always results in between
+    # 50 and 100 terms per hastag
     twitter_dtm <- removeSparseTerms(twitter_dtm, .987)
-    print(twitter_dtm)
     # Create token counts vector
     tokenCounts <- apply(twitter_dtm, 1, sum)
     # Remove cases with no tokens
     twitter_dtm <- twitter_dtm[tokenCounts > 0,]
 }
 
+## Input to this function is a dataset from a twitter API call
+## Output is a tibble of lemmas
 tibble_fxn <- function(x) {
     clean_corp <- clean_fxn(x)
     matrix <- as.matrix(clean_corp)
     tibble <- as_tibble(matrix)
 }
 
+## Creating tweet tibbles using tibble_fxn
 COVID_tbl <- tibble_fxn(COVID)
 COVID19_tbl <- tibble_fxn(COVID19)
 COVID.19_tbl <- tibble_fxn(COVID.19)
 COVID_19_tbl <- tibble_fxn(COVID_19)
 
-# Input to the function is clean token tibble
-# Output is 50 most common ngram wordcloud
+# Visualization
+
+## Input to the function is clean token tibble
+## Output is 50 most common ngram wordcloud
 cloud_fxn <- function(x) {
     wordCounts <- colSums(x)
     wordNames <- names(x)
-    wordcloud(wordNames, wordCounts, max.words=50, color = "springgreen4")
+    wordcloud(wordNames, wordCounts, 
+              max.words=50, scale=c(2,1), 
+              colors = brewer.pal(8, "Dark2"))
 }
 
+## The scale I used makes the wordclouds a little small, but this was the 
+## largest I could get it to be while ensuring that all 50 words were plotted
+
+
+## Input is a tibble of lemmas
+## Output a count of different lemmas that appear >5 times
 counts_fxn <- function(x) {
     wordCounts <- colSums(x)
     summary_tbl <- enframe(wordCounts) %>%
         filter(value > 5)
 }
 
+## Get the lemma counts for different hastags
 COVID_counts <- counts_fxn(COVID_tbl)
 COVID19_counts <- counts_fxn(COVID19_tbl)
 COVID.19_counts <- counts_fxn(COVID.19_tbl)
 COVID_19_counts <- counts_fxn(COVID_19_tbl)
 
+## Join the lemma counts to get overall counts across all hastags in a tibble
 all_four <- COVID_counts %>%
     full_join(COVID19_counts, by = "name") %>%
     full_join(COVID.19_counts, by = "name") %>%
@@ -132,6 +154,7 @@ all_four <- COVID_counts %>%
     filter(complete.cases(.)) %>%
     mutate(total = rowSums(.[,2:5]))
 
+## Make a table with the counts of overlapping lemmas between hashtag pairs
 table_vals <- c(length(intersect(COVID_counts$name, COVID19_counts$name)),
                 length(intersect(COVID_counts$name, COVID.19_counts$name)),
                 length(intersect(COVID_counts$name, COVID_19_counts$name)),
@@ -139,8 +162,11 @@ table_vals <- c(length(intersect(COVID_counts$name, COVID19_counts$name)),
                 length(intersect(COVID19_counts$name, COVID_19_counts$name)),
                 length(intersect(COVID.19_counts$name, COVID_19_counts$name)))
 
-table_names <- c("COVID:COVID19","COVID:COVID.19","COVID:COVID_19","COVID19:COVID.19","COVID19:COVID_19","COVID.19:COVID_19")
-disp_table <- tibble("Hastag Comparisons" = table_names, "Number of Shared Tokens" = table_vals)
+## Add names to table
+table_names <- c("COVID:COVID19","COVID:COVID.19","COVID:COVID_19",
+                 "COVID19:COVID.19","COVID19:COVID_19","COVID.19:COVID_19")
+disp_table <- tibble("Hashtag Comparisons" = table_names, 
+                     "Number of Shared Tokens" = table_vals)
 
 # Define UI for application
 ui <- fluidPage(
@@ -171,7 +197,9 @@ server <- function(input, output) {
             top_n(20) %>%
             ggplot(aes(x= reorder(name, total),y = total)) + 
             geom_col(fill = "darkorchid") + 
-            coord_flip()
+            coord_flip() +
+            ylab("Total Number of Appearances") +
+            xlab("Common Words")
     })
     output$cloud <- renderPlot({
         data <- switch(input$hashtag,
@@ -188,3 +216,7 @@ server <- function(input, output) {
 
 # Run the application 
 shinyApp(ui = ui, server = server)
+
+
+
+# Link to live app: https://phoebe-apps.shinyapps.io/projecta/
